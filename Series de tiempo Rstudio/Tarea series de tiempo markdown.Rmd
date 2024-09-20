@@ -1,0 +1,419 @@
+---
+title: "Tarea serie de tiempo"
+author: "Jose_Montalvo"
+date: "4/15/2024"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+
+# Configuración inicial
+Primero, necesitarás cargar los paquetes necesarios y obtener los datos de las acciones de Tecnoglass desde la API de Yahoo Finance.
+
+```{r}
+library(quantmod)
+library(forecast)
+library(tseries)
+library(zoo)
+library(TTR)
+library(xts)
+
+# Obtención de datos
+start_date <- "2012-01-01" # Debes especificar la fecha de inicio
+end_date <- Sys.Date() # Fecha de hoy
+getSymbols("TGLS", src = "yahoo", from = start_date, to = end_date)
+datos <- na.omit(TGLS)
+
+# Eliminar NA's si los hay
+datos <- na.omit(datos)
+
+# Convertir la columna 'date' a tipo de dato de fecha
+datos$Date <- as.Date(datos$Date)
+
+```
+
+```{r}
+head(datos)
+```
+
+
+
+#Análisis exploratorio de datos
+Explora tus datos para entender su estructura y comportamiento. Esto incluye revisar las estadísticas resumidas, visualizar la serie de tiempo, y posiblemente descomponerla para analizar tendencia y estacionalidad.
+
+
+
+```{r}
+# Visualización de la serie de tiempo
+plot(datos$TGLS.Adjusted, main="Serie de tiempo ajustada de Tecnoglass", xlab="Fecha", ylab="Precio ajustado")
+
+# Descomposición de la serie 
+decompose_datos <- decompose(ts(datos$TGLS.Adjusted, frequency=365))
+plot(decompose_datos)
+
+```
+Lo que nos indica la figura es que a medida que pasa el tiempo, el precio de la compañia a tenido un aumento significativo.
+
+
+
+# Pruebas de estacionariedad
+Antes de ajustar modelos ARIMA, es crucial probar si la serie de tiempo es estacionaria.
+
+
+```{r}
+# Prueba ADF
+adf.test(datos$TGLS.Adjusted)
+
+# Prueba KPSS
+kpss.test(datos$TGLS.Adjusted)
+
+```
+Un valor-p tan alto (mayor que 0.05) indica que no rechazamos la hipótesis nula de que hay una raíz unitaria presente en la serie. Esto sugiere que la serie de tiempo no es estacionaria.
+
+
+
+#Identificación y ajuste del modelo ARIMA
+Basado en el análisis anterior, identifica los parámetros p, d, q para el modelo ARIMA. Puedes usar auto.arima() para encontrar un modelo adecuado automáticamente.
+
+
+```{r}
+
+datos_cierre <- datos$TGLS.Close
+modelo_arima <- auto.arima(datos_cierre)
+summary(modelo_arima)
+
+```
+Modelo ARIMA(2,1,2) con drift
+Orden del modelo: El modelo es ARIMA(2,1,2), lo que significa que utiliza dos términos autorregresivos (AR), una diferenciación (I) para hacer la serie de tiempo estacionaria, y dos términos de media móvil (MA). Además, incluye un término de drift.
+Coeficientes:
+AR1 y AR2: Los coeficientes para los términos autorregresivos son -1.0405 y -0.9498, respectivamente.
+MA1 y MA2: Los coeficientes para los términos de media móvil son 1.0518 y 0.9314, respectivamente.
+Drift: El coeficiente de drift es 0.0155, indicando una tendencia lineal en la serie de tiempo después de ajustar por otros factores.
+
+
+
+
+```{r}
+checkresiduals(modelo_arima)
+
+```
+
+
+```{r}
+close_price <- window(datos[,4])
+
+ts_plot(close_price,
+        title = "Tendencia del cierre de precio",
+        Ytitle = "close en USD",
+        Xtitle = "Fecha")
+```
+
+```{r}
+ts_info(close_price)
+```
+
+
+```{r}
+total_observaciones <- nrow(close_price)
+punto_corte <- round(total_observaciones * 0.8)
+
+# Dividir en entrenamiento y prueba
+train <- close_price[1:punto_corte, ]
+test <- close_price[(punto_corte + 1):total_observaciones, ]
+
+```
+
+
+
+```{r}
+close_price_md <- auto.arima(train)
+head(close_price_md)
+```
+
+```{r}
+close_price_md2 <- auto.arima(train,
+                             max.order = 1,
+                             D = 1,
+                             d = 1,
+                             stepwise = FALSE,
+                             approximation = FALSE)
+summary(close_price_md2)
+```
+
+```{r}
+close_price_test_fc <- forecast(close_price_md2, h = 7)
+close_price_test_fc
+```
+
+```{r}
+final_md <- arima(close_price, order = c(0,1,1), 
+                  seasonal = list(order = c(2,1,1)))
+```
+
+
+
+```{r}
+USgas_fc <- forecast(final_md, h = 7)
+
+plot_forecast(USgas_fc,
+              title = "prediccion cierre de precio 28 dias - Forecast",
+              Ytitle = "precio de cierre",
+              Xtitle = "Fecha")
+```
+
+```{r}
+USgas_fc <- forecast(final_md, h = 14)
+
+plot_forecast(USgas_fc,
+              title = "prediccion cierre de precio 14 dias - Forecast",
+              Ytitle = "precio de cierre",
+              Xtitle = "Fecha")
+```
+
+```{r}
+USgas_fc <- forecast(final_md, h = 21)
+
+plot_forecast(USgas_fc,
+              title = "prediccion cierre de precio 21 dias - Forecast",
+              Ytitle = "precio de cierre",
+              Xtitle = "Fecha")
+```
+
+
+
+```{r}
+USgas_fc <- forecast(final_md, h = 28)
+
+plot_forecast(USgas_fc,
+              title = "prediccion cierre de precio 28 dias - Forecast",
+              Ytitle = "precio de cierre",
+              Xtitle = "Fecha")
+```
+
+
+
+```{r}
+
+close_price_md <- arima(close_price, order = c(2,1,2))
+summary(close_price_md)
+```
+
+
+#Predicción
+Realiza predicciones para los horizontes solicitados (7, 14, 21, 28 días) utilizando predicciones con rolling con ventana de predicción continua de un día.
+
+```{r}
+
+# Horizontes de predicción
+horizontes <- c(7, 14, 21, 28)
+
+# Lista para almacenar las predicciones
+lista_predicciones <- list()
+
+for (h in horizontes) {
+  # Generación de predicciones
+  pred <- forecast(modelo_arima, h=h)
+  
+  # Almacenamiento de predicciones en la lista
+  lista_predicciones[[paste("Horizonte", h, "dias")]] <- pred
+  
+ 
+  
+  #Visualización de las predicciones
+  plot(pred, main=paste("Prediccion para un horizonte de", h, "dias"))
+}
+
+```
+
+
+Tendencia del MSE: Como es de esperar, el MSE aumenta a medida que se extiende el horizonte de predicción. Esto es típico en las predicciones de series temporales porque la incertidumbre aumenta con el tiempo. La predicción a 7 días tiene el MSE más bajo, indicando que es la más precisa entre las probadas. Por otro lado, la predicción a 28 días tiene el MSE más alto, lo que sugiere una mayor incertidumbre o menor precisión.
+Interpretación de MSE:
+7 días: Con un MSE de aproximadamente 8.20, este es el horizonte de predicción más confiable entre los evaluados, indicando un buen nivel de precisión en el corto plazo.
+14 días: El MSE aumenta a aproximadamente 14.52, lo que sugiere que, aunque sigue siendo relativamente preciso, el nivel de incertidumbre en las predicciones se incrementa.
+21 días: Un MSE de aproximadamente 19.05 indica que las predicciones a este horizonte son menos fiables que a 7 o 14 días.
+28 días: El MSE salta a aproximadamente 31.94, lo cual es considerablemente más alto que los horizontes más cortos, reflejando una precisión significativamente menor para las predicciones a largo plazo.
+
+
+
+
+#Repita el paso 2 ahora sin utilizar rolling. Esto es, realice el pronóstico solo utilizando forecast() para los diferentes horizontes de predicción, 7, 14 días, 21 días, 28 días.
+```{r}
+for (h in horizontes) {
+  # Generación de predicciones directas para cada horizonte
+  pred <- forecast(modelo_arima, h=h)
+  
+  # Almacenamiento de predicciones en la lista
+  lista_predicciones[[paste("Horizonte", h, "dias")]] <- pred
+  
+  # Visualización de las predicciones
+  plot(pred, main=paste("Prediccion para un horizonte de", h, "dias"))
+}
+```
+
+```{r}
+datos_reales <- Cl(TGLS)
+```
+
+
+
+
+```{r}
+head(datos_reales)
+```
+
+```{r}
+
+for (h in horizontes) {
+    # Generación de predicciones
+    pred <- forecast(modelo_arima, h=h)
+    
+    # Asegurarnos de que tenemos suficientes datos reales para el cálculo del MSE
+    if (length(datos_reales) >= h) {
+        # Simulando la selección de datos reales para el cálculo de MSE
+        datos_reales_simulados <- tail(datos_reales, h)
+        
+        # Calcular el MSE
+        mse <- mean((pred$mean - datos_reales_simulados)^2)
+        
+        # Imprimir el MSE
+        print(paste("MSE para un horizonte de", h, "dias:", mse))
+    } else {
+        print(paste("No hay suficientes datos reales disponibles para un horizonte de", h, "dias."))
+    }
+    
+    # Visualización de las predicciones
+    plot(pred, main=paste("Prediccion para un horizonte de", h, "dias"))
+}
+
+```
+
+
+```{r}
+# Esto convierte valores numericos
+predicciones_numericas <- as.numeric(pred$mean) 
+datos_reales_numericos <- as.numeric(coredata(datos_reales))
+```
+
+#Realice tablas de error para los ítems 1 y 2, utilizando las métricas: MAPE, MAE, RMSE, MSE, R2. Además, agregue el gráfico de correlación entre la observación real y su predicción en el test, Corr(yt,ỹ t)
+.#
+
+```{r}
+
+error <- datos_reales_numericos- predicciones_numericas
+MAE <- mean(abs(error))
+RMSE <- sqrt(mean(error^2))
+MSE <- mean(error^2)
+MAPE <- mean(abs(error/datos_reales)) * 100
+R2 <- 1 - sum(error^2)/sum((datos_reales - mean(datos_reales))^2)
+
+# Crear una tabla de error
+tabla_errores <- data.frame(MAE, RMSE, MSE, MAPE, R2)
+tabla_errores
+
+# Grafico de correlacion
+predicciones_numericas_long <- length(predicciones_numericas)
+datos_reales_ajustados <- datos_reales_numericos[1:predicciones_numericas_long] 
+
+plot(datos_reales_ajustados, predicciones_numericas, main = "Correlacion entre observaciones y predicciones")
+abline(0, 1, col = "red")
+```
+
+
+Dispersión de los Puntos: Los puntos están dispersos a lo largo de la gráfica, lo que sugiere variabilidad en la precisión de las predicciones a lo largo del rango de los datos reales.
+Tendencia Lineal: No parece haber una línea claramente definida que indique una fuerte correlación positiva o negativa entre las predicciones y los valores reales. Esto puede indicar que el modelo de predicción podría no estar capturando toda la tendencia o patrón en los datos reales.
+Outliers (Valores Atípicos): Si hay puntos que se desvían significativamente de la mayoría de los otros puntos, podrían ser valores atípicos que el modelo no predice bien.
+Rango de Valores: Tanto las predicciones como los valores reales parecen estar dentro de rangos similares en sus respectivos ejes, pero sin una correlación lineal clara, esto no necesariamente implica una buena precisión de predicción.
+
+
+
+Punto # 5
+```{r}
+# se usa autoarima ya que me selecciona el mejor modelo Arima
+# Ajustar el modelo usando BIC
+modelo_arima_bic <- auto.arima(test, ic = "bic")
+
+
+#HQIC=−2log(L)+2kln(ln(n))
+# Ajustar un modelo ARIMA 
+modelo_arima <- auto.arima(test, ic = "aic")
+
+# Calcular HQIC manualmente
+n <- length(test)
+k <- length(coef(modelo_arima))
+loglik <- logLik(modelo_arima)
+modelo_arima_hqic <- -2 * as.numeric(loglik) + 2 * k * log(log(n))
+
+```
+
+
+
+```{r}
+# El objeto 'predicciones_bic' contiene ahora las predicciones para el período de prueba
+
+# Suponiendo que 'datos_test' es tu serie de tiempo o vector de datos de prueba
+longitud_test <- length(test)
+
+# Ajustar el modelo usando BIC
+modelo_arima_bic <- auto.arima(test, ic = "bic")
+
+# Hacer predicciones con el modelo seleccionado por BIC
+predicciones_bic <- forecast(modelo_arima_bic, h=longitud_test)
+
+
+
+```
+
+
+```{r}
+#Predicciones y Comparación de Errores
+
+# Hacer predicciones con ambos modelos
+predicciones_bic <- forecast(modelo_arima_bic, h=longitud_test)
+predicciones_hqic <- forecast(modelo_arima_hqic, h=longitud_test)
+
+# Asegúrate de que 'datos_test' contiene los valores reales para comparar
+errores_bic <- test - predicciones_bic$mean
+errores_hqic <- test - predicciones_hqic$mean
+```
+
+
+
+
+
+```{r}
+# Calcular las métricas de error para BIC
+mae_bic <- mean(abs(errores_bic))
+rmse_bic <- sqrt(mean(errores_bic^2))
+mape_bic <- mean(abs(errores_bic/test), na.rm = TRUE) * 100
+mse_bic <- mean(errores_bic^2)
+r2_bic <- 1 - sum(errores_bic^2) / sum((test - mean(test))^2)
+
+
+# Calcular las métricas de error para HQIC
+mae_hqic <- mean(abs(errores_hqic))
+rmse_hqic <- sqrt(mean(errores_hqic^2))
+mape_hqic <- mean(abs(errores_hqic/test), na.rm = TRUE) * 100
+mse_hqic <- mean(errores_hqic^2)
+r2_hqic <- 1 - sum(errores_hqic^2) / sum((test - mean(test))^2)
+
+
+# Crear un data frame para resumir las métricas de error
+error_metrics <- data.frame(
+  Modelo = c("BIC", "HQIC"),
+  MAE = c(mae_bic, mae_hqic),
+  RMSE = c(rmse_bic, rmse_hqic),
+  MAPE = c(mape_bic, mape_hqic),
+  MSE = c(mse_bic, mse_hqic),
+  R2 = c(r2_bic, r2_hqic)
+)
+
+# Imprimir las métricas de error
+print(error_metrics)
+
+```
+
+
